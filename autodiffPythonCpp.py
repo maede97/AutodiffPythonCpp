@@ -1,4 +1,4 @@
-from sympy import numbered_symbols, cse, ccode, Symbol
+from sympy import numbered_symbols, cse, ccode, Symbol, derive_by_array
 import sympy
 import typing
 import numpy as np
@@ -11,23 +11,48 @@ def norm(v: np.array) -> sympy.Expr:
         sum_ = sum_ + v[i] * v[i]
     return sympy.sqrt(sum_)
 
-def __sympyToC(symfunc: sympy.Function) -> str:
-    """ creates C code from a sympy function (somewhat optimized).
+def __sympyToC_Grad(exprs: list) -> str:
+    """ creates C code from a list of sympy functions (somewhat optimized).
 
     source: https://stackoverflow.com/questions/22665990/optimize-code-generated-by-sympy
     and modified """
 
-
-    tmpsyms = numbered_symbols("tmp")
-    symbols, simple = cse(symfunc, symbols=tmpsyms)
-    symbolslist = sorted(map(lambda x:str(x), list(symfunc.atoms(Symbol))))
-    varstring=",".join( " double "+x for x in symbolslist )
+    tmpsyms = sympy.numbered_symbols("tmp")
+    symbols, simple = sympy.cse(exprs, symbols=tmpsyms)
     c_code = ""
     for s in symbols:
-        c_code +=  "  double " +ccode(s[0]) + " = " + ccode(s[1]) + ";\n"
-    c_code +=  "  double r = " + ccode(simple[0])+";\n"
-    c_code +=  "  return r;\n"
+        c_code +=  "  double " +sympy.ccode(s[0]) + " = " + sympy.ccode(s[1]) + ";\n"
+    for i,s in enumerate(simple):
+        c_code += f"  out({i}) = " + sympy.ccode(s) + ";\n"
     return c_code
+
+def __sympyToC_Hess(exprs: list, num_der: int) -> str:
+    """ creates C code from a list of sympy functions (somewhat optimized).
+    Assumes that the output format is a hessian -> matrix.
+
+    source: https://stackoverflow.com/questions/22665990/optimize-code-generated-by-sympy
+    and modified """
+    tmpsyms = sympy.numbered_symbols("tmp")
+    symbols, simple = sympy.cse(exprs, symbols=tmpsyms)
+    c_code = ""
+    for s in symbols:
+        c_code +=  "  double " +sympy.ccode(s[0]) + " = " + sympy.ccode(s[1]) + ";\n"
+    for i in range(num_der):
+        for j in range(num_der):
+            if(i <= j):
+                c_code += f"  out({i},{j}) = " + sympy.ccode(simple[i * num_der + j]) + ";\n"
+            else:
+                c_code += f"  out({i},{j}) = out({j}, {i});\n"
+    return c_code
+
+def __createParams(P: np.array, props: np.array):
+    """ Creates a string with the parameters and properties accessed as they would be eigen vectors. """
+    ret = ""
+    for i in range(len(P)):
+        ret += f"  const double P{i} = P({i});\n"
+    for i in range(len(props)):
+        ret += f"  const double props{i} = props({i});\n"
+    return ret
 
 def create_header_source_files(func : sympy.Function, P : np.array, props : np.array, num_derivatives : int, filename : str ="codegen", namespace : str ="Codegen") -> None:
     """ Create C code from a given function.
@@ -44,67 +69,31 @@ def create_header_source_files(func : sympy.Function, P : np.array, props : np.a
 
     final_header_code = f"#pragma once\n\n#include <Eigen/Core>\n\nnamespace {namespace} "+"{\n\n"
     final_source_code = f"#include \"{filename}.h\"\n#include <cmath>\n\nusing namespace std;\n\nnamespace {namespace} "+"{\n\n"
-    hessian_header_code = ""
-    hessian_source_code = ""
 
     # master functions on top of header file
-    final_header_code += f"void dDdP(const Eigen::Matrix<double,{len_P},1>& P, const Eigen::Matrix<double,{len_props},1>& props, Eigen::Matrix<double,{len_der},1>& dDdP_out);\n"
-    final_header_code += f"void d2DdP2(const Eigen::Matrix<double,{len_P},1>& P, const Eigen::Matrix<double,{len_props},1>& props, Eigen::Matrix<double,{len_der},{len_der}>& d2DdP2_out);\n"
-    final_header_code += "\n"
-
-    header_arguments = ""
-    for i in range(len_P):
-        header_arguments += f"const double& P{i}, "
-    for i in range(len_props-1):
-        header_arguments += f"const double& props{i}, "
-    header_arguments += f"const double& props{i+1}"
-    arguments = ""
-    for i in range(len_P):
-        arguments += f"P({i}), "
-    for i in range(len_props - 1):
-        arguments += f"props({i}), "
-    arguments += f"props({i+1})"
-
-    for i in range(len_der):
-        dDdPi = func.diff(P[i])
-
-        final_header_code += f"double dDdP_{i}({header_arguments});\n"
-        final_source_code += f"double dDdP_{i}({header_arguments}) "+"{\n"
-        final_source_code += __sympyToC(dDdPi)
-        final_source_code += "}\n"
-
-        for j in range(len_der):
-        # compute hessians
-            if i <= j:
-                hessianij = dDdPi.diff(P[j])
-                hessian_header_code += f"double d2DdP2_{i}_{j}({header_arguments});\n"
-                hessian_source_code += f"double d2DdP2_{i}_{j}({header_arguments}) "+"{\n"
-                hessian_source_code += __sympyToC(hessianij)
-                hessian_source_code += "}\n"
-
-    # Add hessian source code
-    final_header_code += f"\n{hessian_header_code}"
-    final_source_code += f"\n{hessian_source_code}\n"
+    final_header_code += f"void dDdP(const Eigen::Matrix<double,{len_P},1>& P, const Eigen::Matrix<double,{len_props},1>& props, Eigen::Matrix<double,{len_der},1>& out);\n"
+    final_header_code += f"void d2DdP2(const Eigen::Matrix<double,{len_P},1>& P, const Eigen::Matrix<double,{len_props},1>& props, Eigen::Matrix<double,{len_der},{len_der}>& out);\n"
     
     final_header_code += "\n}" +f" /* namespace {namespace} */"
 
     # add c master function dDdP
-    final_source_code += f"void dDdP(const Eigen::Matrix<double,{len_P},1>& P, const Eigen::Matrix<double,{len_props},1>& props, Eigen::Matrix<double,{len_der},1>& dDdP_out) " + "{\n"
-    for i in range(len_der):
-        final_source_code += f"    dDdP_out({i}) = dDdP_{i}({arguments});\n"
-    final_source_code += "}\n"
+    final_source_code += f"void dDdP(const Eigen::Matrix<double,{len_P},1>& P, const Eigen::Matrix<double,{len_props},1>& props, Eigen::Matrix<double,{len_der},1>& out) " + "{\n"
+    final_source_code += __createParams(P, props)
+    final_source_code += __sympyToC_Grad(list(derive_by_array(func, P[:len_der])))
+    final_source_code += "}\n\n"
 
-    # add c master function d2DdP2
-    final_source_code += f"void d2DdP2(const Eigen::Matrix<double,{len_P},1>& P, const Eigen::Matrix<double,{len_props},1>& props, Eigen::Matrix<double,{len_der},{len_der}>& d2DdP2_out) " + "{\n"
-    for i in range(len_der):
-        for j in range(len_der):
-            #make use of the fact that the hessian is symmetric
-            if i <= j:
-                final_source_code += f"    d2DdP2_out({i},{j}) = d2DdP2_{i}_{j}({arguments});\n"
-            else:
-                final_source_code += f"    d2DdP2_out({i},{j}) = d2DdP2_out({j}, {i});\n"
+    final_source_code += f"void d2DdP2(const Eigen::Matrix<double,{len_P},1>& P, const Eigen::Matrix<double,{len_props},1>& props, Eigen::Matrix<double,{len_der},{len_der}>& out) " + "{\n"
+    final_source_code += __createParams(P, props)
+    first_der = derive_by_array(func, P[:len_der])
+    second_der = derive_by_array(first_der, P[:len_der])
+    # second_der is now a matrix -> flatten it
+    exprs = []
+    for row in second_der:
+        for col in row:
+            exprs.append(col)
+    final_source_code += __sympyToC_Hess(exprs, len_der)
+    
     final_source_code += "}\n"
-    # Add closing namespace
     final_source_code += "\n}" +f" /* namespace {namespace} */"
 
     with open(filename + ".h", "w") as wr:
