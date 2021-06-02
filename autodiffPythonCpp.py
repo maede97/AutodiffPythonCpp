@@ -11,14 +11,17 @@ def norm(v: np.array) -> sympy.Expr:
         sum_ = sum_ + v[i] * v[i]
     return sympy.sqrt(sum_)
 
-def __sympyToC_Grad(exprs: list) -> str:
+def __sympyToC_Grad(exprs: list, doOpts: bool = False) -> str:
     """ creates C code from a list of sympy functions (somewhat optimized).
 
     source: https://stackoverflow.com/questions/22665990/optimize-code-generated-by-sympy
     and modified """
 
     tmpsyms = sympy.numbered_symbols("tmp")
-    symbols, simple = sympy.cse(exprs, symbols=tmpsyms)
+    if doOpts:
+        symbols, simple = sympy.cse(exprs, symbols=tmpsyms, optimizations="basic", order='none')
+    else:
+        symbols, simple = sympy.cse(exprs, symbols=tmpsyms)
     c_code = ""
     for s in symbols:
         c_code +=  "  double " +sympy.ccode(s[0]) + " = " + sympy.ccode(s[1]) + ";\n"
@@ -26,14 +29,17 @@ def __sympyToC_Grad(exprs: list) -> str:
         c_code += f"  out({i}) = " + sympy.ccode(s) + ";\n"
     return c_code
 
-def __sympyToC_Hess(exprs: list, num_der: int) -> str:
+def __sympyToC_Hess(exprs: list, num_der: int, doOpts: bool = False) -> str:
     """ creates C code from a list of sympy functions (somewhat optimized).
     Assumes that the output format is a hessian -> matrix.
 
     source: https://stackoverflow.com/questions/22665990/optimize-code-generated-by-sympy
     and modified """
     tmpsyms = sympy.numbered_symbols("tmp")
-    symbols, simple = sympy.cse(exprs, symbols=tmpsyms)
+    if doOpts:
+        symbols, simple = sympy.cse(exprs, symbols=tmpsyms, optimizations="basic", order='none')
+    else:
+        symbols, simple = sympy.cse(exprs, symbols=tmpsyms)
     c_code = ""
     for s in symbols:
         c_code +=  "  double " +sympy.ccode(s[0]) + " = " + sympy.ccode(s[1]) + ";\n"
@@ -54,7 +60,7 @@ def __createParams(P: np.array, props: np.array):
         ret += f"  const double props{i} = props({i});\n"
     return ret
 
-def create_header_source_files(func : sympy.Function, P : np.array, props : np.array, num_derivatives : int, filename : str ="codegen", namespace : str ="Codegen") -> None:
+def create_header_source_files(func : sympy.Function, P : np.array, props : np.array, num_derivatives : int, filename : str ="codegen", namespace : str ="Codegen", doOpts : bool = False) -> None:
     """ Create C code from a given function.
     @param func The function handle to take the first and second derivatives from.
     @param P The parameter vector
@@ -62,6 +68,7 @@ def create_header_source_files(func : sympy.Function, P : np.array, props : np.a
     @param num_derivatives How large the gradient and hessian are (gradient: num_derivatives x 1, hessian: num_derivatives x num_derivatives)
     @param filename Where to store the generated code
     @param namespace What namespace to put in
+    @param doOpts Whether to perform some basic optimizations on the c-code. Highly increases code generation time, but code (might) be faster.
     """
     len_P = len(P)
     len_props = len(props)
