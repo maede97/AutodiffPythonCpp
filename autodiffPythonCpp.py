@@ -1,7 +1,9 @@
 from sympy import numbered_symbols, cse, ccode, Symbol
 import sympy
+import typing
+import numpy as np
 
-def norm(v):
+def norm(v: np.array) -> sympy.Expr:
     """ Computes the norm of a vector. """
     l = len(v)
     sum_ = 0.
@@ -9,8 +11,13 @@ def norm(v):
         sum_ = sum_ + v[i] * v[i]
     return sympy.sqrt(sum_)
 
-# after https://stackoverflow.com/questions/22665990/optimize-code-generated-by-sympy
-def __sympyToC(symfunc):
+def __sympyToC(symfunc: sympy.Function) -> str:
+    """ creates C code from a sympy function (somewhat optimized).
+
+    source: https://stackoverflow.com/questions/22665990/optimize-code-generated-by-sympy
+    and modified """
+
+
     tmpsyms = numbered_symbols("tmp")
     symbols, simple = cse(symfunc, symbols=tmpsyms)
     symbolslist = sorted(map(lambda x:str(x), list(symfunc.atoms(Symbol))))
@@ -22,7 +29,15 @@ def __sympyToC(symfunc):
     c_code +=  "  return r;\n"
     return c_code
 
-def create_header_source_files(func, P, props, num_derivatives, filename="codegen", namespace="Codegen"):
+def create_header_source_files(func : sympy.Function, P : np.array, props : np.array, num_derivatives : int, filename : str ="codegen", namespace : str ="Codegen") -> None:
+    """ Create C code from a given function.
+    @param func The function handle to take the first and second derivatives from.
+    @param P The parameter vector
+    @param props The properties vector
+    @param num_derivatives How large the gradient and hessian are (gradient: num_derivatives x 1, hessian: num_derivatives x num_derivatives)
+    @param filename Where to store the generated code
+    @param namespace What namespace to put in
+    """
     len_P = len(P)
     len_props = len(props)
     len_der = num_derivatives
