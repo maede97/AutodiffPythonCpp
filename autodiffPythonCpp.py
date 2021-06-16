@@ -11,6 +11,24 @@ def norm(v: np.array) -> sympy.Expr:
         sum_ = sum_ + v[i] * v[i]
     return sympy.sqrt(sum_)
 
+def __sympyToC(exprs: sympy.Function, doOpts: bool = False) -> str:
+    """ creates C code from a sympy function (somewhat optimized).
+
+    source: https://stackoverflow.com/questions/22665990/optimize-code-generated-by-sympy
+    and modified """
+
+    tmpsyms = sympy.numbered_symbols("tmp")
+    if doOpts:
+        symbols, simple = sympy.cse(exprs, symbols=tmpsyms, optimizations="basic", order='none')
+    else:
+        symbols, simple = sympy.cse(exprs, symbols=tmpsyms)
+    c_code = ""
+    for s in symbols:
+        c_code +=  "  double " +sympy.ccode(s[0]) + " = " + sympy.ccode(s[1]) + ";\n"
+
+    c_code += f"  return " + sympy.ccode(simple[0]) + ";\n"
+    return c_code
+
 def __sympyToC_Grad(exprs: list, doOpts: bool = False) -> str:
     """ creates C code from a list of sympy functions (somewhat optimized).
 
@@ -78,12 +96,19 @@ def create_header_source_files(func : sympy.Function, P : np.array, props : np.a
     final_source_code = f"#include \"{filename}.h\"\n#include <cmath>\n\nusing namespace std;\n\nnamespace {namespace} "+"{\n\n"
 
     # master functions on top of header file
+    final_header_code += f"double compute_D(const Eigen::Matrix<double,{len_P},1>& P, const Eigen::Matrix<double,{len_props},1>& props);\n"
     final_header_code += f"void dDdP(const Eigen::Matrix<double,{len_P},1>& P, const Eigen::Matrix<double,{len_props},1>& props, Eigen::Matrix<double,{len_der},1>& out);\n"
     final_header_code += f"void d2DdP2(const Eigen::Matrix<double,{len_P},1>& P, const Eigen::Matrix<double,{len_props},1>& props, Eigen::Matrix<double,{len_der},{len_der}>& out);\n"
     
     final_header_code += "\n}" +f" /* namespace {namespace} */"
+    
+    # add c master function compute_D
+    final_source_code += f"double compute_D(const Eigen::Matrix<double,{len_P},1>& P, const Eigen::Matrix<double,{len_props},1>& props) " + "{\n"
+    final_source_code += __createParams(P, props)
+    final_source_code += __sympyToC([func])
+    final_source_code += "}\n\n"
 
-    # add c master function dDdP
+    # add c function dDdP
     final_source_code += f"void dDdP(const Eigen::Matrix<double,{len_P},1>& P, const Eigen::Matrix<double,{len_props},1>& props, Eigen::Matrix<double,{len_der},1>& out) " + "{\n"
     final_source_code += __createParams(P, props)
     final_source_code += __sympyToC_Grad(list(derive_by_array(func, P[:len_der])))
